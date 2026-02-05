@@ -35,24 +35,25 @@ class Agent:
         self.accumulated_tokens = {"input": 0, "output": 0}
         
         # Callbacks
-        self.on_log: Optional[Callable[[str], None]] = None
+        self.on_log: Optional[Callable[[str, Optional[str]], None]] = None # message, ass_name
         self.on_update: Optional[Callable[[Dict], None]] = None # Generic state update
-        self.on_section_start: Optional[Callable[[str, str, int, int], None]] = None # task_name, requirements, index, total
-        self.on_draft: Optional[Callable[[str], None]] = None # draft_text
-        self.on_qa_feedback: Optional[Callable[[str], None]] = None # feedback_text
-        self.on_task_finished: Optional[Callable[[int, str], None]] = None # index, result_text
-        self.on_plan_generated: Optional[Callable[[List[str]], None]] = None # list of tasks
+        self.on_section_start: Optional[Callable[[str, str, str, int, int], None]] = None # ass_name, task_name, requirements, index, total
+        self.on_draft: Optional[Callable[[str, str], None]] = None # ass_name, draft_text
+        self.on_qa_feedback: Optional[Callable[[str, str], None]] = None # ass_name, feedback_text
+        self.on_task_finished: Optional[Callable[[str, int, str], None]] = None # ass_name, index, result_text
+        self.on_plan_generated: Optional[Callable[[str, List[str]], None]] = None # ass_name, list of tasks
 
-    def log(self, message: str):
+    def log(self, message: str, ass_name: Optional[str] = None):
         # Console output
+        prefix = f"[{ass_name}] " if ass_name else ""
         if self.console:
-            self.console.print(f"[bold cyan]Agent:[/bold cyan] {message}")
+            self.console.print(f"[bold cyan]Agent:[/bold cyan] {prefix}{message}")
         else:
-            print(f"Agent: {message}")
+            print(f"Agent: {prefix}{message}")
             
         # GUI Callback
         if self.on_log:
-            self.on_log(message)
+            self.on_log(message, ass_name)
 
     def _track_usage(self, prompt: str, response: str):
         in_tok = count_tokens(prompt, self.model)
@@ -88,10 +89,10 @@ class Agent:
 
     def _process_task(self, ass_filename: str, task: str, i: int, total_tasks: int, full_context: str, assignment_text: str, user_instructions: str) -> str:
         self._check_budget()
-        self.log(f"[{ass_filename}] Starting Task {i+1}/{total_tasks}: {task}")
+        self.log(f"Starting Task {i+1}/{total_tasks}: {task}", ass_filename)
         
         if self.on_section_start:
-            self.on_section_start(task, assignment_text, i, total_tasks)
+            self.on_section_start(ass_filename, task, assignment_text, i, total_tasks)
 
         worker_input = WORKER_PROMPT.format(
             current_task=task,
@@ -106,15 +107,15 @@ class Agent:
         self._track_usage(SYSTEM_PROMPT + worker_input, draft)
         
         if self.on_draft:
-            self.on_draft(draft)
+            self.on_draft(ass_filename, draft)
         
         # QA Loop
         self._check_budget()
         
         if self.skip_qa:
-            self.log(f"[{ass_filename}] Skipping QA Review for Task {i+1}.")
+            self.log(f"Skipping QA Review for Task {i+1}.", ass_filename)
         else:
-            self.log(f"[{ass_filename}] QA Review for Task {i+1}...")
+            self.log(f"QA Review for Task {i+1}...", ass_filename)
             
             qa_attempts = 0
             while qa_attempts <= self.max_qa_retries:
@@ -134,18 +135,18 @@ class Agent:
                 self._track_usage(SYSTEM_PROMPT + qa_input, review)
                 
                 if self.on_qa_feedback:
-                    self.on_qa_feedback(review)
+                    self.on_qa_feedback(ass_filename, review)
 
                 if "PASS" in review:
-                    self.log(f"[{ass_filename}] QA Passed for Task {i+1}.")
+                    self.log(f"QA Passed for Task {i+1}.", ass_filename)
                     break
                 
                 qa_attempts += 1
                 if qa_attempts > self.max_qa_retries:
-                    self.log(f"[{ass_filename}] QA failed max retries for Task {i+1}.")
+                    self.log(f"QA failed max retries for Task {i+1}.", ass_filename)
                     break
                     
-                self.log(f"[{ass_filename}] QA failed (Attempt {qa_attempts}/{self.max_qa_retries}). Improving Task {i+1}...")
+                self.log(f"QA failed (Attempt {qa_attempts}/{self.max_qa_retries}). Improving Task {i+1}...", ass_filename)
                 self._check_budget()
                 
                 refinement_input = f"""
@@ -165,28 +166,28 @@ class Agent:
                 draft = refined_draft
                 
                 if self.on_draft:
-                        self.on_draft(draft)
+                        self.on_draft(ass_filename, draft)
         
         cleaned_text = replace_sz(clean_ai_artifacts(draft))
         result = f"## {task}\n\n{cleaned_text}"
         if self.on_task_finished:
-            self.on_task_finished(i, result)
+            self.on_task_finished(ass_filename, i, result)
         return result
 
     def process_assignment(self, ass_path: str, output_dir: str, full_context: str, input_overview: str, custom_prompt: str) -> str:
         ass_filename = os.path.basename(ass_path)
-        self.log(f"Processing Assignment: {ass_filename}")
+        self.log(f"Processing Assignment: {ass_filename}", ass_filename)
         
         assignment_text = load_file_content(ass_path)
         if not assignment_text:
-            self.log(f"Skipping empty assignment: {ass_filename}")
+            self.log(f"Skipping empty assignment: {ass_filename}", ass_filename)
             return ""
         
-        self.log(f"[{ass_filename}] Loaded assignment text ({len(assignment_text)} chars).")
+        self.log(f"Loaded assignment text ({len(assignment_text)} chars).", ass_filename)
 
         # 2. Plan
         self._check_budget()
-        self.log(f"[{ass_filename}] Creating a plan...")
+        self.log(f"Creating a plan...", ass_filename)
         
         user_instructions = ""
         if custom_prompt:
@@ -210,7 +211,7 @@ class Agent:
             tasks = ["Bearbeite die Aufgabenstellung vollständig."]
         
         if self.on_plan_generated:
-            self.on_plan_generated(tasks)
+            self.on_plan_generated(ass_filename, tasks)
 
         self.log(f"[{ass_filename}] Parsed {len(tasks)} tasks.")
         
@@ -259,10 +260,10 @@ class Agent:
         
         if ass_path.lower().endswith(".docx"):
             out_path = os.path.join(output_dir, ass_filename)
-            self.log(f"[{ass_filename}] Saving DOCX to {out_path}...")
+            self.log(f"Saving DOCX to {out_path}...", ass_filename)
             success = append_solution_to_docx(ass_path, out_path, full_solution_text)
             if not success:
-                 self.log(f"[{ass_filename}] Failed to save DOCX. Check console for details.")
+                 self.log(f"Failed to save DOCX. Check console for details.", ass_filename)
         
         return report_part
 

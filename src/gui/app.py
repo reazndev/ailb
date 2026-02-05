@@ -35,20 +35,10 @@ if "agent_future" not in st.session_state:
     st.session_state.agent_future = None
 if "executor" not in st.session_state:
     st.session_state.executor = ThreadPoolExecutor(max_workers=1)
-if "current_tasks" not in st.session_state:
-    st.session_state.current_tasks = []
+if "assignments_tasks" not in st.session_state:
+    st.session_state.assignments_tasks = {} # filename -> {"tasks": [], "statuses": {}, "logs": [], "draft": "", "reqs": "", "qa": ""}
 if "current_task_index" not in st.session_state:
     st.session_state.current_task_index = 0
-if "current_draft" not in st.session_state:
-    st.session_state.current_draft = ""
-if "current_reqs" not in st.session_state:
-    st.session_state.current_reqs = ""
-if "qa_feedback" not in st.session_state:
-    st.session_state.qa_feedback = ""
-if "agent_result" not in st.session_state:
-    st.session_state.agent_result = ""
-if "task_statuses" not in st.session_state:
-    st.session_state.task_statuses = {} # index -> "running" | "done"
 
 # --- SIDEBAR ---
 st.sidebar.title("🎓 AI Student")
@@ -64,30 +54,100 @@ st.sidebar.text(f"In Tokens: {st.session_state.tokens['input']}")
 st.sidebar.text(f"Out Tokens: {st.session_state.tokens['output']}")
 
 # --- CALLBACKS ---
-def log_callback(msg):
-    st.session_state.logs.append(msg)
+def log_callback(msg, ass_name=None):
+    if ass_name and ass_name in st.session_state.assignments_tasks:
+        st.session_state.assignments_tasks[ass_name]["logs"].append(msg)
+    else:
+        st.session_state.logs.append(msg)
     
 def update_callback(data):
     st.session_state.cost = data["total_cost"]
     st.session_state.tokens = data["tokens"]
 
-def plan_callback(tasks):
-    st.session_state.current_tasks = tasks
-    st.session_state.task_statuses = {i: "pending" for i in range(len(tasks))}
+def plan_callback(ass_name, tasks):
+    st.session_state.assignments_tasks[ass_name] = {
+        "tasks": tasks,
+        "statuses": {i: "pending" for i in range(len(tasks))},
+        "logs": [],
+        "draft": "",
+        "reqs": "",
+        "qa": ""
+    }
     
-def section_callback(task, reqs, i, total):
-    st.session_state.current_task_index = i
-    st.session_state.current_reqs = reqs
-    st.session_state.task_statuses[i] = "running"
+def section_callback(ass_name, task, reqs, i, total):
+    if ass_name in st.session_state.assignments_tasks:
+        st.session_state.assignments_tasks[ass_name]["statuses"][i] = "running"
+        st.session_state.assignments_tasks[ass_name]["reqs"] = reqs
     
-def draft_callback(text):
-    st.session_state.current_draft = text
+def draft_callback(ass_name, text):
+    if ass_name in st.session_state.assignments_tasks:
+        st.session_state.assignments_tasks[ass_name]["draft"] = text
     
-def qa_callback(text):
-    st.session_state.qa_feedback = text
+def qa_callback(ass_name, text):
+    if ass_name in st.session_state.assignments_tasks:
+        st.session_state.assignments_tasks[ass_name]["qa"] = text
 
-def task_finished_callback(i, text):
-    st.session_state.task_statuses[i] = "done"
+def task_finished_callback(ass_name, i, text):
+    if ass_name in st.session_state.assignments_tasks:
+        st.session_state.assignments_tasks[ass_name]["statuses"][i] = "done"
+
+def find_file_globally(filename, hz_list):
+    """Returns a list of HZ names where the filename exists."""
+    found_in = []
+    for hz in hz_list:
+        all_files = hz.input_files + hz.assignment_files + hz.solutions_files
+        if any(os.path.basename(f) == filename for f in all_files):
+            found_in.append(hz.name)
+    return found_in
+
+def render_file_list_with_delete(file_list):
+    """Renders a list of files with a compact delete icon for each."""
+    for f in file_list:
+        fname = os.path.basename(f)
+        # Use a very narrow second column for the icon
+        fc1, fc2 = st.columns([0.9, 0.1])
+        fc1.markdown(f":material/description: {fname}")
+        if fc2.button(label="", icon=":material/delete:", key=f"del_{f}", help=f"Delete {fname}"):
+            try:
+                os.remove(f)
+                st.success(f"Deleted {fname}")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+def handle_upload(hz_name, category, uploaded_files, hz_list):
+    """Handles the upload process with duplicate checking."""
+    if not uploaded_files:
+        return
+
+    duplicates = {}
+    for f in uploaded_files:
+        existing_hzs = find_file_globally(f.name, hz_list)
+        if existing_hzs:
+            duplicates[f.name] = existing_hzs
+
+    if duplicates:
+        st.warning("⚠️ Some files already exist in other projects:")
+        for fname, hzs in duplicates.items():
+            st.write(f"- **{fname}** is already in: {', '.join(hzs)}")
+        
+        if st.button(f"Proceed with upload to {hz_name}/{category}?", key=f"conf_{hz_name}_{category}"):
+            save_files(hz_name, category, uploaded_files)
+    else:
+        if st.button(f"Save {len(uploaded_files)} files to {hz_name}/{category}", key=f"save_{hz_name}_{category}"):
+            save_files(hz_name, category, uploaded_files)
+
+def save_files(hz_name, category, uploaded_files):
+    target_dir = os.path.join("data", hz_name, category)
+    os.makedirs(target_dir, exist_ok=True)
+    for f in uploaded_files:
+        dest = os.path.join(target_dir, f.name)
+        with open(dest, "wb") as w:
+            w.write(f.getvalue())
+    st.success(f"Uploaded to {category}!")
+    time.sleep(0.5)
+    st.rerun()
 
 # --- PAGES ---
 
@@ -215,64 +275,72 @@ def page_dashboard():
                 st.warning("Signal sent to agent. Waiting for it to acknowledge...")
 
             # Render Progress
-            st.markdown("### 📊 Progress")
-            total = len(st.session_state.current_tasks) if st.session_state.current_tasks else 1
-            progress_bar = st.progress(st.session_state.current_task_index / total)
-            
-            with st.expander("📝 Task List", expanded=True):
-                if not st.session_state.current_tasks:
-                    st.info("Waiting for plan...")
-                else:
-                    task_html = ""
-                    for idx, t in enumerate(st.session_state.current_tasks):
-                        status = st.session_state.task_statuses.get(idx, "pending")
-                        if status == "done":
-                            style = "color: gray; text-decoration: line-through;"
-                            icon = "✅"
-                        elif status == "running":
-                            style = "background-color: #1E90FF; color: white; padding: 2px 5px; border-radius: 3px;"
-                            icon = "⏳"
-                        else:
-                            style = ""
-                            icon = "▫️"
-                        task_html += f"<div style='margin-bottom: 5px; {style}'>{icon} {t}</div>"
-                    st.markdown(task_html, unsafe_allow_html=True)
+            st.markdown("### 📊 Progress & Process")
+            if not st.session_state.assignments_tasks:
+                st.info("Waiting for plans...")
+            else:
+                for ass_name, data in st.session_state.assignments_tasks.items():
+                    tasks = data["tasks"]
+                    statuses = data["statuses"]
+                    logs = data["logs"]
+                    draft = data["draft"]
+                    reqs = data["reqs"]
+                    qa = data["qa"]
+                    
+                    total = len(tasks) if tasks else 1
+                    done_count = sum(1 for s in statuses.values() if s == "done")
+                    progress_val = min(1.0, max(0.0, done_count / total))
+                    
+                    with st.expander(f"📁 {ass_name} ({int(progress_val*100)}%)", expanded=True):
+                        st.progress(progress_val)
+                        
+                        tabs = st.tabs(["📝 Task List", "📜 Logs", "👁️ Live Preview"])
+                        
+                        with tabs[0]:
+                            task_html = ""
+                            for idx, t in enumerate(tasks):
+                                status = statuses.get(idx, "pending")
+                                if status == "done":
+                                    style = "color: gray; text-decoration: line-through;"
+                                    icon = "✅"
+                                elif status == "running":
+                                    style = "font-weight: bold;"
+                                    icon = "⚙️"
+                                else:
+                                    style = ""
+                                    icon = "▫️"
+                                task_html += f"<div style='margin-bottom: 5px; {style}'>{icon} {t}</div>"
+                            st.markdown(task_html, unsafe_allow_html=True)
+                            
+                        with tabs[1]:
+                            for l in logs:
+                                st.text(l)
+                                
+                        with tabs[2]:
+                            p1, p2, p3 = st.columns(3)
+                            with p1:
+                                st.markdown("**Current Task Requirements**")
+                                if reqs: st.markdown(f"> {reqs[:1000]}...")
+                                else: st.info("Waiting...")
+                            with p2:
+                                st.markdown("**Generated Draft**")
+                                if draft: st.markdown(f"```markdown\n{draft[:2000]}...\n```")
+                                else: st.info("Waiting...")
+                            with p3:
+                                st.markdown("**QA Feedback**")
+                                if qa:
+                                    if "PASS" in qa: st.success("✅ QA Passed!")
+                                    else: st.warning(f"{qa}")
+                                else: st.info("Waiting...")
 
-            # Preview Area
-            st.markdown("---")
-            st.markdown("### 👁️ Live Preview")
-            p1, p2, p3 = st.columns(3)
-            with p1:
-                st.subheader("Current Task")
-                if st.session_state.current_reqs:
-                    st.markdown(f"**Assignment / QA Criteria:**\n\n> {st.session_state.current_reqs[:2000]}...")
-                else:
-                    st.info("Waiting...")
-            with p2:
-                st.subheader("Generated Draft")
-                if st.session_state.current_draft:
-                    st.markdown(f"```markdown\n{st.session_state.current_draft[:5000]}...\n```")
-                else:
-                    st.info("Waiting...")
-            with p3:
-                st.subheader("QA Feedback")
-                if st.session_state.qa_feedback:
-                    if "PASS" in st.session_state.qa_feedback:
-                        st.success("✅ QA Passed!")
-                    else:
-                        st.warning(f"**Feedback:**\n\n{st.session_state.qa_feedback}")
-                else:
-                    st.info("Waiting...")
-
-            # Auto-refresh
             time.sleep(0.5)
             st.rerun()
 
     # --- RESULT DISPLAY ---
     if st.session_state.agent_result:
-        st.success("Finished!")
-        st.markdown("### Agent Report")
-        st.markdown(st.session_state.agent_result)
+        st.success("All Assignments Finished!")
+        with st.expander("🎓 Final Combined Report", expanded=False):
+            st.markdown(st.session_state.agent_result)
 
     st.markdown("---")
     
@@ -290,7 +358,7 @@ def page_dashboard():
             st.session_state.current_reqs = ""
             st.session_state.qa_feedback = ""
             st.session_state.agent_result = ""
-            st.session_state.task_statuses = {}
+            st.session_state.assignments_tasks = {}
             
             try:
                 agent = Agent(
@@ -384,8 +452,7 @@ def page_project_manager():
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.subheader("Input Files")
-                for f in hz.input_files:
-                    st.text(f"📄 {os.path.basename(f)}")
+                render_file_list_with_delete(hz.input_files)
                 
                 # Upload Input
                 up_in = st.file_uploader(
@@ -394,21 +461,11 @@ def page_project_manager():
                     accept_multiple_files=True,
                     type=["pdf", "docx", "pptx", "txt", "md"]
                 )
-                if up_in:
-                    input_dir = os.path.join(hz.path, "Input")
-                    os.makedirs(input_dir, exist_ok=True)
-                    for f in up_in:
-                        dest = os.path.join(input_dir, f.name)
-                        with open(dest, "wb") as w:
-                            w.write(f.getvalue())
-                    st.success("Uploaded Input Files!")
-                    time.sleep(0.5)
-                    st.rerun()
+                handle_upload(hz.name, "Input", up_in, hz_list)
 
             with c2:
                 st.subheader("Assignments")
-                for f in hz.assignment_files:
-                    st.text(f"📝 {os.path.basename(f)}")
+                render_file_list_with_delete(hz.assignment_files)
                     
                 # Upload Assignment
                 up_ass = st.file_uploader(
@@ -417,21 +474,11 @@ def page_project_manager():
                     accept_multiple_files=True,
                     type=["pdf", "docx", "txt", "md"]
                 )
-                if up_ass:
-                    ass_dir = os.path.join(hz.path, "Assignments")
-                    os.makedirs(ass_dir, exist_ok=True)
-                    for f in up_ass:
-                        dest = os.path.join(ass_dir, f.name)
-                        with open(dest, "wb") as w:
-                            w.write(f.getvalue())
-                    st.success("Uploaded Assignment Files!")
-                    time.sleep(0.5)
-                    st.rerun()
+                handle_upload(hz.name, "Assignments", up_ass, hz_list)
             
             with c3:
                 st.subheader("Reference Solutions")
-                for f in hz.solutions_files:
-                    st.text(f"💡 {os.path.basename(f)}")
+                render_file_list_with_delete(hz.solutions_files)
                 
                 # Upload Solutions
                 up_sol = st.file_uploader(
@@ -440,16 +487,7 @@ def page_project_manager():
                     accept_multiple_files=True,
                     type=["pdf", "docx", "txt", "md"]
                 )
-                if up_sol:
-                    sol_dir = os.path.join(hz.path, "Solutions")
-                    os.makedirs(sol_dir, exist_ok=True)
-                    for f in up_sol:
-                        dest = os.path.join(sol_dir, f.name)
-                        with open(dest, "wb") as w:
-                            w.write(f.getvalue())
-                    st.success("Uploaded Solution!")
-                    time.sleep(0.5)
-                    st.rerun()
+                handle_upload(hz.name, "Solutions", up_sol, hz_list)
 
 def page_settings():
     st.title("⚙️ Settings")
