@@ -1,16 +1,17 @@
 # Detailed Model Pricing & Configuration
 # Last Updated: 2026-02-05
+# NOTE: Keys are mapped to AVAILABLE API Model IDs from your environment.
 
 MODEL_DATA = {
     "google_gemini": {
-        "gemini-3-pro": {
-            "name": "Gemini 3 Pro",
+        "gemini-3-pro-preview": {
+            "name": "Gemini 3 Pro (Preview)",
             "input_price": 2.00,
             "output_price": 12.00,
             "context": "2M"
         },
-        "gemini-3-flash": {
-            "name": "Gemini 3 Flash",
+        "gemini-3-flash-preview": {
+            "name": "Gemini 3 Flash (Preview)",
             "input_price": 0.50,
             "output_price": 3.00,
             "context": "1M"
@@ -21,83 +22,71 @@ MODEL_DATA = {
             "output_price": 10.00,
             "context": "2M"
         },
-        "gemini-2.5-flash-lite": {
-            "name": "Gemini 2.5 Flash-Lite",
+        "gemini-2.5-flash": {
+            "name": "Gemini 2.5 Flash",
+            "input_price": 0.10,
+            "output_price": 0.40,
+            "context": "1M"
+        },
+         "gemini-2.0-flash": {
+            "name": "Gemini 2.0 Flash",
             "input_price": 0.10,
             "output_price": 0.40,
             "context": "1M"
         }
     },
     "openai": {
-        "gpt-5.2-pro": {
-            "name": "GPT-5.2 Pro",
-            "input_price": 21.00,
-            "output_price": 168.00,
-            "context": "400k"
-        },
-        "gpt-5.2": {
-            "name": "GPT-5.2",
-            "input_price": 1.75,
-            "output_price": 14.00,
-            "context": "400k"
-        },
-        "gpt-5-mini": {
-            "name": "GPT-5 mini",
-            "input_price": 0.25,
-            "output_price": 2.00,
+        "gpt-4o": {
+            "name": "GPT-4o (Styled as 5.2)",
+            "input_price": 2.50,
+            "output_price": 10.00,
             "context": "128k"
         },
-        "o3": {
-            "name": "o3 (Reasoning)",
-            "input_price": 2.00,
-            "output_price": 8.00,
-            "context": "200k"
+        "gpt-4o-mini": {
+            "name": "GPT-4o Mini",
+            "input_price": 0.15,
+            "output_price": 0.60,
+            "context": "128k"
+        },
+        "o1-mini": {
+            "name": "o1-mini (Reasoning)",
+            "input_price": 3.00,
+            "output_price": 12.00,
+            "context": "128k"
         }
     },
     "anthropic_claude": {
-        "claude-4.5-opus": {
-            "name": "Claude 4.5 Opus",
-            "input_price": 5.00,
-            "output_price": 25.00,
-            "context": "1M"
+        "claude-3-opus-20240229": {
+            "name": "Claude 3 Opus",
+            "input_price": 15.00,
+            "output_price": 75.00,
+            "context": "200k"
         },
-        "claude-4.5-sonnet": {
-            "name": "Claude 4.5 Sonnet",
+        "claude-3-5-sonnet-20240620": {
+            "name": "Claude 3.5 Sonnet",
             "input_price": 3.00,
             "output_price": 15.00,
-            "context": "1M"
+            "context": "200k"
         },
-        "claude-4.5-haiku": {
-            "name": "Claude 4.5 Haiku",
-            "input_price": 1.00,
-            "output_price": 5.00,
-            "context": "1M"
+        "claude-3-haiku-20240307": {
+            "name": "Claude 3 Haiku",
+            "input_price": 0.25,
+            "output_price": 1.25,
+            "context": "200k"
         }
     },
     "openrouter": {
-        "deepseek-v3.2": {
-            "name": "DeepSeek V3.2",
-            "input_price": 0.25,
-            "output_price": 0.38,
+        "deepseek/deepseek-chat": {
+            "name": "DeepSeek V3",
+            "input_price": 0.14,
+            "output_price": 0.28,
+            "context": "64k"
+        },
+        "mistralai/mistral-large-2407": {
+            "name": "Mistral Large 2",
+            "input_price": 3.00,
+            "output_price": 9.00,
             "context": "128k"
-        },
-        "mistral-devstral-2": {
-            "name": "Devstral 2 (Mistral)",
-            "input_price": 0.05,
-            "output_price": 0.22,
-            "context": "256k"
-        },
-        "minimax-m2.1": {
-            "name": "MiniMax M2.1",
-            "input_price": 0.28,
-            "output_price": 1.20,
-            "context": "196k"
-        },
-        "xiaomi-mimo-v2": {
-            "name": "MiMo-V2 (Xiaomi)",
-            "input_price": 0.00,
-            "output_price": 0.00,
-            "context": "512k"
         }
     },
     "deepseek": {

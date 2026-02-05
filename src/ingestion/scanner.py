@@ -8,6 +8,7 @@ class HZData:
     path: str
     input_files: List[str] = field(default_factory=list)
     assignment_files: List[str] = field(default_factory=list)
+    solutions_files: List[str] = field(default_factory=list)
 
 def scan_directory(base_path: str = "data") -> List[HZData]:
     """
@@ -17,6 +18,7 @@ def scan_directory(base_path: str = "data") -> List[HZData]:
       HZ_Name/
         Input/
         Assignments/
+        Solutions/
     """
     hz_list = []
     
@@ -47,11 +49,18 @@ def scan_directory(base_path: str = "data") -> List[HZData]:
                     for file in files:
                         if not file.startswith("~") and not file.startswith("."):
                             hz_data.assignment_files.append(os.path.join(root, file))
+                            
+            # Check for Solutions folder
+            solutions_dir = os.path.join(hz_path, "Solutions")
+            if os.path.exists(solutions_dir):
+                for root, _, files in os.walk(solutions_dir):
+                    for file in files:
+                        if not file.startswith("~") and not file.startswith("."):
+                            hz_data.solutions_files.append(os.path.join(root, file))
             
             # Always add the HZ if it's a directory in the data folder, 
             # assuming it's a valid project container.
-            # Or stricter: check if it has the Input/Assignments structure.
-            if os.path.exists(input_dir) or os.path.exists(assignments_dir):
+            if os.path.exists(input_dir) or os.path.exists(assignments_dir) or os.path.exists(solutions_dir):
                 hz_list.append(hz_data)
                 
     return hz_list
