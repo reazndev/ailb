@@ -98,7 +98,10 @@ def qa_callback(ass_name, text):
 
 def task_finished_callback(ass_name, i, text):
     if ass_name in st.session_state.assignments_tasks:
-        st.session_state.assignments_tasks[ass_name]["statuses"][i] = "done"
+        if text == "[SKIPPED]":
+            st.session_state.assignments_tasks[ass_name]["statuses"][i] = "skipped"
+        else:
+            st.session_state.assignments_tasks[ass_name]["statuses"][i] = "done"
         st.session_state.assignments_tasks[ass_name]["status_msg"] = f"Task {i+1} complete"
 
 def find_file_globally(filename, hz_list):
@@ -240,6 +243,7 @@ def page_dashboard():
                             for i, t in enumerate(tasks):
                                 s = statuses.get(i, "pending")
                                 if s == "done": style, icon = "color: gray; text-decoration: line-through;", "✅"
+                                elif s == "skipped": style, icon = "color: orange; font-style: italic;", "⏭️"
                                 elif s == "running": style, icon = "background-color: #1E90FF; color: white; padding: 3px 8px; border-radius: 5px; font-weight: bold;", "⚙️"
                                 else: style, icon = "", "▫️"
                                 task_html += f"<div style='margin-bottom: 5px; {style}'>{icon} {t}</div>"

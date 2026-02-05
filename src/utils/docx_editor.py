@@ -81,8 +81,7 @@ def integrate_solution_to_docx(original_path: str, output_path: str, task_result
         # 3. Fallback: Append remaining tasks at the end
         remaining = [res for i, res in enumerate(task_results) if i not in used_tasks]
         if remaining:
-            doc.add_page_break()
-            doc.add_heading("Zusätzliche Ausarbeitungen", level=1)
+            # We no longer add a special section header
             for res in remaining:
                 p = doc.add_paragraph()
                 p.add_run(f"**{res['task']}**\n").bold = True
@@ -134,8 +133,6 @@ def force_append_all_tasks(file_path: str, task_results: List[Dict[str, str]]):
     """
     try:
         doc = Document(file_path)
-        doc.add_page_break()
-        doc.add_heading("Wiederhergestellte Inhalte (Backup)", level=1)
         for res in task_results:
             p = doc.add_paragraph()
             p.add_run(f"{res['task']}\n").bold = True

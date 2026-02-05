@@ -99,6 +99,12 @@ class Agent:
         return False
 
     def _process_task(self, ass_filename: str, task: str, i: int, total_tasks: int, full_context: str, assignment_text: str, user_instructions: str) -> str:
+        if "[SKIP]" in task.upper():
+            self.log(f"Skipping task {i+1} (Partner/External context detected).", ass_filename)
+            if self.on_task_finished:
+                self.on_task_finished(ass_filename, i, "[SKIPPED]")
+            return {"task": task, "content": "[Übersprungen, da Partnerarbeit oder externes Feedback erforderlich]"}
+
         self._check_budget()
         self.log(f"Starting Task {i+1}/{total_tasks}: {task}", ass_filename)
         
