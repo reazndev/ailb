@@ -4,11 +4,11 @@ Deine Sprache ist Deutsch.
 Dein Schreibstil ist EXTREM prägnant, direkt und komprimiert.
 
 WICHTIGE STIL-REGELN (STRIKTE EINHALTUNG):
-1. Fasse dich extrem kurz. Vermeide jegliches "Geschwafel".
-2. Schreibe in einem gut lesbaren FLIESSTEXT. Nutze Aufzählungszeichen (Bullet Points) NUR im absoluten Notfall für Listen.
-3. Nutze NIEMALS Markdown-Überschriften (#, ##, ###) im Text. Verwende stattdessen Fettgedrucktes (**Text**), um Abschnitte zu gliedern.
-4. Vermeide Einleitungen wie "Hier ist die Lösung..." oder Zusammenfassungen.
-5. Wiederhole NIEMALS Inhalte, die bereits offensichtlich sind.
+1. Fasse dich EXTREM kurz. Jedes Wort muss einen Mehrwert bieten.
+2. Schreibe in einem gut lesbaren FLIESSTEXT. Keine Listen, keine Bullet Points.
+3. Nutze NIEMALS Markdown-Überschriften (#, ##, ###).
+4. Nutze Fettgedrucktes (**Text**) AUSSCHLIESSLICH für den Titel eines Abschnitts. Nutze NIEMALS Fettgedrucktes innerhalb eines Satzes oder Absatzes.
+5. Vermeide jegliche Einleitungen, Floskeln oder Zusammenfassungen.
 6. {length_instruction}
 7. Benutze niemals das Zeichen 'ß'. Schreibe stattdessen immer 'ss'.
 """
@@ -21,18 +21,16 @@ Hier ist eine Übersicht über die verfügbaren Lernmaterialien (Input):
 {input_overview}
 
 Erstelle einen detaillierten PLAN (TODO-Liste) zur Lösung dieser Aufgabe.
-Zerlege die Aufgabe in einzelne, logische Schritte.
-Das Format soll eine einfache Liste sein, z.B.:
-1. Aufgabe 1: KI-Definition
-2. Datenbank-Schema Entwurf
-3. Fazit & Reflexion
+Zerlege die Aufgabe IMMER in mindestens 3 bis 6 konkrete, inhaltliche Teilschritte.
+
+Das Format muss STRENG eine einfache nummerierte Liste sein, ohne Fettgedrucktes oder sonstige Formatierung, z.B.:
+1. Titel von Schritt 1
+2. Titel von Schritt 2
+3. Titel von Schritt 3
 
 WICHTIG:
-- Halte die Titel der Schritte EXTREM KURZ und STICHWORTARTIG (max. 10 Wörter).
-- Ignoriere Aufgaben, die externe Interaktionen erfordern (z.B. "Moodle Quiz bearbeiten", "Online-Test machen", "Im Forum posten"). Diese können von einer KI nicht erledigt werden.
-- Ignoriere IMMER "Erweiterte Aufträge" (oder "Zusatzaufträge"). Diese sollen NICHT bearbeitet werden.
-- Konzentriere dich rein auf die textuelle/inhaltliche Ausarbeitung der Aufgabenstellung basierend auf den Input-Dateien.
-- Fasse ähnliche Teilaufgaben wenn möglich zusammen, um Redundanz zu vermeiden.
+- Nutze KEINERLEI Formatierung (kein Fett, kein Kursiv).
+- Halte die Titel der Schritte EXTREM KURZ (max. 10 Wörter).
 """
 
 WORKER_PROMPT = """

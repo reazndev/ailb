@@ -6,7 +6,7 @@ from typing import List, Dict, Callable, Optional
 from src.llm.client import LLMClient
 from src.agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT, WORKER_PROMPT, QA_PROMPT
 from src.utils.cost import count_tokens, calculate_cost
-from src.utils.docx_editor import append_solution_to_docx
+from src.utils.docx_editor import append_solution_to_docx, verify_docx_integration, force_append_all_tasks
 from src.ingestion.loader import load_file_content
 from src.utils.text_cleaner import replace_sz, clean_ai_artifacts, restore_umlauts
 
@@ -32,11 +32,11 @@ class Agent:
         
         # Define length instruction based on profile
         if self.length_profile == "short":
-            self.length_instruction = "Max. 50-80 Wörter pro Abschnitt. Fasse dich extrem kurz."
+            self.length_instruction = "Max. 20-40 Wörter pro Abschnitt. Sei absolut minimalistisch."
         elif self.length_profile == "normal":
-            self.length_instruction = "Max. 150-180 Wörter pro Abschnitt."
+            self.length_instruction = "Max. 80-120 Wörter pro Abschnitt."
         else: # long
-            self.length_instruction = "Max. 300-350 Wörter pro Abschnitt. Erkläre ausführlich aber prägnant."
+            self.length_instruction = "Max. 200-250 Wörter pro Abschnitt."
 
         self.system_prompt_formatted = SYSTEM_PROMPT.format(length_instruction=self.length_instruction)
         
@@ -222,9 +222,14 @@ class Agent:
         for line in plan_response.split('\n'):
             line = line.strip()
             if not line: continue
-            # Match "1. Task" or "- Task"
-            if re.match(r'^(\d+[\.\)]|[-•\*])\s+', line):
-                tasks.append(line)
+            # Match "1. Task", "1) Task", "- Task" etc.
+            if re.match(r'^(\d+[\.\)]|[-•\*])(?:\s+|$)', line):
+                # Strip the marker
+                clean_task = re.sub(r'^(\d+[\.\)]|[-•\*])\s*', '', line)
+                # Strip Markdown bold/italic
+                clean_task = clean_task.replace('**', '').replace('__', '').replace('*', '').replace('_', '')
+                if clean_task:
+                    tasks.append(clean_task.strip())
         
         if not tasks:
             self.log(f"[{ass_filename}] ⚠️ No specific tasks found. Defaulting.")
@@ -284,8 +289,21 @@ class Agent:
             out_path = os.path.join(output_dir, ass_filename)
             self.log(f"Integrating solution into {out_path}...", ass_filename)
             success = append_solution_to_docx(ass_path, out_path, task_results)
-            if not success:
+            
+            # Verify integration
+            missing_indices = verify_docx_integration(out_path, task_results)
+            if missing_indices:
+                self.log(f"⚠️ Verification failed: {len(missing_indices)} tasks missing in DOCX. Retrying simple append...", ass_filename)
+                missing_tasks = [task_results[i] for i in missing_indices]
+                retry_success = force_append_all_tasks(out_path, missing_tasks)
+                if retry_success:
+                    self.log(f"✅ Recovery successful. Missing tasks appended to end of document.", ass_filename)
+                else:
+                    self.log(f"❌ Recovery failed. Please use the MD backup.", ass_filename)
+            elif not success:
                  self.log(f"Failed to integrate into DOCX. Check console.", ass_filename)
+            else:
+                self.log(f"✅ DOCX integration verified successfully.", ass_filename)
         
         return report_part
 
