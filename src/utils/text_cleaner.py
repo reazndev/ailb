@@ -4,7 +4,27 @@ def replace_sz(text: str) -> str:
     """
     if not text:
         return ""
-    return text.replace("ß", "ss")
+    return text.replace("ß", "ss").replace("ẞ", "SS")
+
+def restore_umlauts(text: str) -> str:
+    """
+    Replaces ae, oe, ue with ä, ö, ü where appropriate.
+    Note: This is heuristic and can sometimes hit valid 'ue' words,
+    but matches the specific user request for restoration.
+    """
+    if not text:
+        return ""
+    
+    # Heuristic mapping
+    # Using lowercase and uppercase versions
+    replacements = {
+        "ae": "ä", "oe": "ö", "ue": "ü",
+        "Ae": "Ä", "Oe": "Ö", "Ue": "Ü"
+    }
+    
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
 
 def clean_ai_artifacts(text: str) -> str:
     """

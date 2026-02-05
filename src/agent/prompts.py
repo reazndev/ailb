@@ -6,10 +6,11 @@ Dein Schreibstil ist EXTREM prägnant, direkt und komprimiert.
 WICHTIGE STIL-REGELN (STRIKTE EINHALTUNG):
 1. Fasse dich extrem kurz. Vermeide jegliches "Geschwafel".
 2. Schreibe in einem gut lesbaren FLIESSTEXT. Nutze Aufzählungszeichen (Bullet Points) NUR im absoluten Notfall für Listen.
-3. Vermeide Einleitungen wie "Hier ist die Lösung..." oder Zusammenfassungen.
-4. Wiederhole NIEMALS Inhalte, die bereits offensichtlich sind.
-5. Max. 150-200 Wörter pro Abschnitt, wenn möglich weniger.
-6. Benutze niemals das Zeichen 'ß'. Schreibe stattdessen immer 'ss'.
+3. Nutze NIEMALS Markdown-Überschriften (#, ##, ###) im Text. Verwende stattdessen Fettgedrucktes (**Text**), um Abschnitte zu gliedern.
+4. Vermeide Einleitungen wie "Hier ist die Lösung..." oder Zusammenfassungen.
+5. Wiederhole NIEMALS Inhalte, die bereits offensichtlich sind.
+6. {length_instruction}
+7. Benutze niemals das Zeichen 'ß'. Schreibe stattdessen immer 'ss'.
 """
 
 PLANNER_PROMPT = """
@@ -22,12 +23,14 @@ Hier ist eine Übersicht über die verfügbaren Lernmaterialien (Input):
 Erstelle einen detaillierten PLAN (TODO-Liste) zur Lösung dieser Aufgabe.
 Zerlege die Aufgabe in einzelne, logische Schritte.
 Das Format soll eine einfache Liste sein, z.B.:
-1. Aufgabe Teil 1 bearbeiten...
-2. Datenbank-Schema erstellen...
-3. Fazit schreiben...
+1. Aufgabe 1: KI-Definition
+2. Datenbank-Schema Entwurf
+3. Fazit & Reflexion
 
 WICHTIG:
+- Halte die Titel der Schritte EXTREM KURZ und STICHWORTARTIG (max. 10 Wörter).
 - Ignoriere Aufgaben, die externe Interaktionen erfordern (z.B. "Moodle Quiz bearbeiten", "Online-Test machen", "Im Forum posten"). Diese können von einer KI nicht erledigt werden.
+- Ignoriere IMMER "Erweiterte Aufträge" (oder "Zusatzaufträge"). Diese sollen NICHT bearbeitet werden.
 - Konzentriere dich rein auf die textuelle/inhaltliche Ausarbeitung der Aufgabenstellung basierend auf den Input-Dateien.
 - Fasse ähnliche Teilaufgaben wenn möglich zusammen, um Redundanz zu vermeiden.
 """

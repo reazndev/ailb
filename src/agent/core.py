@@ -8,7 +8,7 @@ from src.agent.prompts import SYSTEM_PROMPT, PLANNER_PROMPT, WORKER_PROMPT, QA_P
 from src.utils.cost import count_tokens, calculate_cost
 from src.utils.docx_editor import append_solution_to_docx
 from src.ingestion.loader import load_file_content
-from src.utils.text_cleaner import replace_sz, clean_ai_artifacts
+from src.utils.text_cleaner import replace_sz, clean_ai_artifacts, restore_umlauts
 
 # Try to import Streamlit context helpers for thread safety
 try:
@@ -18,7 +18,7 @@ except ImportError:
     get_script_run_ctx = None
 
 class Agent:
-    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, max_subtasks: int = 3, skip_qa: bool = False, max_qa_retries: int = 1, min_qa_score: float = 9.0):
+    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, max_subtasks: int = 3, skip_qa: bool = False, max_qa_retries: int = 1, min_qa_score: float = 9.0, length_profile: str = "long"):
         self.llm = LLMClient(provider=provider, model=model)
         self.model = model
         self.max_parallel = max_parallel
@@ -26,8 +26,19 @@ class Agent:
         self.skip_qa = skip_qa
         self.max_qa_retries = max_qa_retries
         self.min_qa_score = min_qa_score
+        self.length_profile = length_profile.lower()
         self.console = None  # Legacy CLI support
         self.lock = threading.Lock() # For thread-safe stats updates
+        
+        # Define length instruction based on profile
+        if self.length_profile == "short":
+            self.length_instruction = "Max. 50-80 Wörter pro Abschnitt. Fasse dich extrem kurz."
+        elif self.length_profile == "normal":
+            self.length_instruction = "Max. 150-180 Wörter pro Abschnitt."
+        else: # long
+            self.length_instruction = "Max. 300-350 Wörter pro Abschnitt. Erkläre ausführlich aber prägnant."
+
+        self.system_prompt_formatted = SYSTEM_PROMPT.format(length_instruction=self.length_instruction)
         
         # State tracking
         self.total_cost = 0.0
@@ -101,10 +112,10 @@ class Agent:
         ) + user_instructions
         
         draft = self.llm.generate_text(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt_formatted,
             user_prompt=worker_input
         )
-        self._track_usage(SYSTEM_PROMPT + worker_input, draft)
+        self._track_usage(self.system_prompt_formatted + worker_input, draft)
         
         if self.on_draft:
             self.on_draft(ass_filename, draft)
@@ -129,10 +140,10 @@ class Agent:
                 )
                 
                 review = self.llm.generate_text(
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=self.system_prompt_formatted,
                     user_prompt=qa_input
                 )
-                self._track_usage(SYSTEM_PROMPT + qa_input, review)
+                self._track_usage(self.system_prompt_formatted + qa_input, review)
                 
                 if self.on_qa_feedback:
                     self.on_qa_feedback(ass_filename, review)
@@ -159,20 +170,22 @@ class Agent:
                 {draft}
                 """
                 refined_draft = self.llm.generate_text(
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=self.system_prompt_formatted,
                     user_prompt=refinement_input
                 )
-                self._track_usage(SYSTEM_PROMPT + refinement_input, refined_draft)
+                self._track_usage(self.system_prompt_formatted + refinement_input, refined_draft)
                 draft = refined_draft
                 
                 if self.on_draft:
                         self.on_draft(ass_filename, draft)
         
-        cleaned_text = replace_sz(clean_ai_artifacts(draft))
-        result = f"## {task}\n\n{cleaned_text}"
+        cleaned_text = restore_umlauts(replace_sz(clean_ai_artifacts(draft)))
+        result_data = {"task": task, "content": cleaned_text}
         if self.on_task_finished:
-            self.on_task_finished(ass_filename, i, result)
-        return result
+            # We still pass the markdown string to the callback for backward compatibility if needed, 
+            # but we could also pass the dict. Let's keep the callback string-based for now.
+            self.on_task_finished(ass_filename, i, f"## {task}\n\n{cleaned_text}")
+        return result_data
 
     def process_assignment(self, ass_path: str, output_dir: str, full_context: str, input_overview: str, custom_prompt: str) -> str:
         ass_filename = os.path.basename(ass_path)
@@ -199,12 +212,19 @@ class Agent:
         ) + user_instructions
         
         plan_response = self.llm.generate_text(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt_formatted,
             user_prompt=planner_input
         )
-        self._track_usage(SYSTEM_PROMPT + planner_input, plan_response)
+        self._track_usage(self.system_prompt_formatted + planner_input, plan_response)
         
-        tasks = [line.strip() for line in plan_response.split('\n') if line.strip() and (line[0].isdigit() or line.startswith('-'))]
+        import re
+        tasks = []
+        for line in plan_response.split('\n'):
+            line = line.strip()
+            if not line: continue
+            # Match "1. Task" or "- Task"
+            if re.match(r'^(\d+[\.\)]|[-•\*])\s+', line):
+                tasks.append(line)
         
         if not tasks:
             self.log(f"[{ass_filename}] ⚠️ No specific tasks found. Defaulting.")
@@ -216,7 +236,7 @@ class Agent:
         self.log(f"[{ass_filename}] Parsed {len(tasks)} tasks.")
         
         # 3. Execute Tasks (Parallelized)
-        assignment_solution_parts = [None] * len(tasks)
+        task_results = [None] * len(tasks) # List of dicts {"task": ..., "content": ...}
         
         # Capture context for thread safety
         ctx = get_script_run_ctx() if get_script_run_ctx else None
@@ -239,31 +259,33 @@ class Agent:
                 idx = future_to_index[future]
                 try:
                     part_result = future.result()
-                    assignment_solution_parts[idx] = part_result
+                    task_results[idx] = part_result
                 except Exception as e:
                     self.log(f"Error in task {idx}: {e}")
-                    assignment_solution_parts[idx] = f"## Task {idx} Failed\n\nError: {e}"
+                    task_results[idx] = {"task": tasks[idx], "content": f"Error: {e}"}
 
-        # Filter out Nones in case of catastrophic failure
-        assignment_solution_parts = [p for p in assignment_solution_parts if p is not None]
+        # Filter out Nones
+        task_results = [p for p in task_results if p is not None]
         
+        # Build full solution text for MD and report
+        assignment_solution_parts = [f"**{res['task']}**\n\n{res['content']}" for res in task_results]
         full_solution_text = "\n\n".join(assignment_solution_parts)
-        self.log(f"[{ass_filename}] Generated solution length: {len(full_solution_text)} chars.")
+        self.log(f"Generated solution length: {len(full_solution_text)} chars.", ass_filename)
 
         # Always save MD backup
         md_path = os.path.join(output_dir, f"{ass_filename}_solution.md")
         with open(md_path, "w") as f:
             f.write(full_solution_text)
-        self.log(f"[{ass_filename}] Saved MD backup.")
+        self.log(f"Saved MD backup.", ass_filename)
         
-        report_part = f"# Solution for {ass_filename}\n\n{full_solution_text}"
+        report_part = f"# {ass_filename}\n\n{full_solution_text}"
         
         if ass_path.lower().endswith(".docx"):
             out_path = os.path.join(output_dir, ass_filename)
-            self.log(f"Saving DOCX to {out_path}...", ass_filename)
-            success = append_solution_to_docx(ass_path, out_path, full_solution_text)
+            self.log(f"Integrating solution into {out_path}...", ass_filename)
+            success = append_solution_to_docx(ass_path, out_path, task_results)
             if not success:
-                 self.log(f"Failed to save DOCX. Check console for details.", ass_filename)
+                 self.log(f"Failed to integrate into DOCX. Check console.", ass_filename)
         
         return report_part
 
