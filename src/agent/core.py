@@ -18,10 +18,11 @@ except ImportError:
     get_script_run_ctx = None
 
 class Agent:
-    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, skip_qa: bool = False, max_qa_retries: int = 1, min_qa_score: float = 9.0):
+    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, max_subtasks: int = 3, skip_qa: bool = False, max_qa_retries: int = 1, min_qa_score: float = 9.0):
         self.llm = LLMClient(provider=provider, model=model)
         self.model = model
         self.max_parallel = max_parallel
+        self.max_subtasks = max_subtasks
         self.skip_qa = skip_qa
         self.max_qa_retries = max_qa_retries
         self.min_qa_score = min_qa_score
@@ -39,6 +40,7 @@ class Agent:
         self.on_section_start: Optional[Callable[[str, str, int, int], None]] = None # task_name, requirements, index, total
         self.on_draft: Optional[Callable[[str], None]] = None # draft_text
         self.on_qa_feedback: Optional[Callable[[str], None]] = None # feedback_text
+        self.on_task_finished: Optional[Callable[[int, str], None]] = None # index, result_text
         self.on_plan_generated: Optional[Callable[[List[str]], None]] = None # list of tasks
 
     def log(self, message: str):
@@ -166,7 +168,10 @@ class Agent:
                         self.on_draft(draft)
         
         cleaned_text = replace_sz(clean_ai_artifacts(draft))
-        return f"## {task}\n\n{cleaned_text}"
+        result = f"## {task}\n\n{cleaned_text}"
+        if self.on_task_finished:
+            self.on_task_finished(i, result)
+        return result
 
     def process_assignment(self, ass_path: str, output_dir: str, full_context: str, input_overview: str, custom_prompt: str) -> str:
         ass_filename = os.path.basename(ass_path)
@@ -222,8 +227,8 @@ class Agent:
                  ass_filename, task_str, index, len(tasks), full_context, assignment_text, user_instructions
              )
 
-        # Use same max_parallel for task concurrency
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
+        # Use separate limit for subtask concurrency
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_subtasks) as executor:
             future_to_index = {
                 executor.submit(subtask_wrapper, i, task): i 
                 for i, task in enumerate(tasks)
@@ -242,20 +247,23 @@ class Agent:
         assignment_solution_parts = [p for p in assignment_solution_parts if p is not None]
         
         full_solution_text = "\n\n".join(assignment_solution_parts)
+        self.log(f"[{ass_filename}] Generated solution length: {len(full_solution_text)} chars.")
+
+        # Always save MD backup
+        md_path = os.path.join(output_dir, f"{ass_filename}_solution.md")
+        with open(md_path, "w") as f:
+            f.write(full_solution_text)
+        self.log(f"[{ass_filename}] Saved MD backup.")
+        
         report_part = f"# Solution for {ass_filename}\n\n{full_solution_text}"
         
         if ass_path.lower().endswith(".docx"):
             out_path = os.path.join(output_dir, ass_filename)
-            self.log(f"[{ass_filename}] Saving DOCX...")
+            self.log(f"[{ass_filename}] Saving DOCX to {out_path}...")
             success = append_solution_to_docx(ass_path, out_path, full_solution_text)
             if not success:
-                 self.log(f"[{ass_filename}] Failed to save DOCX.")
-        else:
-            out_path = os.path.join(output_dir, f"{ass_filename}_solution.md")
-            with open(out_path, "w") as f:
-                f.write(full_solution_text)
-            self.log(f"[{ass_filename}] Saved MD.")
-
+                 self.log(f"[{ass_filename}] Failed to save DOCX. Check console for details.")
+        
         return report_part
 
     def run(self, hz_name: str, assignment_paths: List[str], input_texts: Dict[str, str], custom_prompt: str = "") -> str:

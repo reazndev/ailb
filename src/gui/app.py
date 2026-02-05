@@ -2,12 +2,23 @@ import streamlit as st
 import os
 import shutil
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from src.ingestion.scanner import scan_directory
 from src.ingestion.loader import load_file_content
 from src.agent.core import Agent
 from src.utils.pricing_data import MODEL_DATA, PRICING_REGISTRY
 from src.utils.models import get_available_models
+
+# Try to import Streamlit context helpers for thread safety
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:
+    try:
+        from streamlit.scriptrunner import add_script_run_ctx, get_script_run_ctx
+    except ImportError:
+        add_script_run_ctx = None
+        get_script_run_ctx = None
 
 st.set_page_config(page_title="AI Student Agent", layout="wide", page_icon="🎓")
 
@@ -36,6 +47,8 @@ if "qa_feedback" not in st.session_state:
     st.session_state.qa_feedback = ""
 if "agent_result" not in st.session_state:
     st.session_state.agent_result = ""
+if "task_statuses" not in st.session_state:
+    st.session_state.task_statuses = {} # index -> "running" | "done"
 
 # --- SIDEBAR ---
 st.sidebar.title("🎓 AI Student")
@@ -60,16 +73,21 @@ def update_callback(data):
 
 def plan_callback(tasks):
     st.session_state.current_tasks = tasks
+    st.session_state.task_statuses = {i: "pending" for i in range(len(tasks))}
     
 def section_callback(task, reqs, i, total):
     st.session_state.current_task_index = i
     st.session_state.current_reqs = reqs
+    st.session_state.task_statuses[i] = "running"
     
 def draft_callback(text):
     st.session_state.current_draft = text
     
 def qa_callback(text):
     st.session_state.qa_feedback = text
+
+def task_finished_callback(i, text):
+    st.session_state.task_statuses[i] = "done"
 
 # --- PAGES ---
 
@@ -121,7 +139,8 @@ def page_dashboard():
         st.session_state['cost_limit'] = cost_limit
         
     with c4:
-        max_parallel = st.slider("Parallel Agents", min_value=1, max_value=10, value=5)
+        max_parallel = st.slider("Max Assignments", min_value=1, max_value=10, value=5)
+        max_subtasks = st.slider("Max Subtasks", min_value=1, max_value=10, value=3)
         
     with c5:
         skip_qa = st.checkbox("Skip QA")
@@ -204,15 +223,20 @@ def page_dashboard():
                 if not st.session_state.current_tasks:
                     st.info("Waiting for plan...")
                 else:
-                    md_lines = []
+                    task_html = ""
                     for idx, t in enumerate(st.session_state.current_tasks):
-                        if idx < st.session_state.current_task_index:
-                            md_lines.append(f"- [x] ~{t}~")
-                        elif idx == st.session_state.current_task_index:
-                            md_lines.append(f"- [ ] **{t}** (Current)")
+                        status = st.session_state.task_statuses.get(idx, "pending")
+                        if status == "done":
+                            style = "color: gray; text-decoration: line-through;"
+                            icon = "✅"
+                        elif status == "running":
+                            style = "background-color: #1E90FF; color: white; padding: 2px 5px; border-radius: 3px;"
+                            icon = "⏳"
                         else:
-                            md_lines.append(f"- [ ] {t}")
-                    st.markdown("\n".join(md_lines))
+                            style = ""
+                            icon = "▫️"
+                        task_html += f"<div style='margin-bottom: 5px; {style}'>{icon} {t}</div>"
+                    st.markdown(task_html, unsafe_allow_html=True)
 
             # Preview Area
             st.markdown("---")
@@ -266,6 +290,7 @@ def page_dashboard():
             st.session_state.current_reqs = ""
             st.session_state.qa_feedback = ""
             st.session_state.agent_result = ""
+            st.session_state.task_statuses = {}
             
             try:
                 agent = Agent(
@@ -273,6 +298,7 @@ def page_dashboard():
                     model=model, 
                     cost_limit=cost_limit, 
                     max_parallel=max_parallel,
+                    max_subtasks=max_subtasks,
                     skip_qa=skip_qa,
                     max_qa_retries=max_qa_retries,
                     min_qa_score=min_qa_score
@@ -283,6 +309,7 @@ def page_dashboard():
                 agent.on_draft = draft_callback
                 agent.on_qa_feedback = qa_callback
                 agent.on_plan_generated = plan_callback
+                agent.on_task_finished = task_finished_callback
                 
                 # Load Inputs + Solutions as Context
                 with st.spinner("Loading context files..."):
@@ -298,8 +325,16 @@ def page_dashboard():
                          if c: input_texts[f"SOLUTION_REF_{os.path.basename(f)}"] = c
                 
                 # Submit to background thread
+                # Capture context to pass to the thread
+                ctx = get_script_run_ctx() if get_script_run_ctx else None
+                
+                def run_agent_with_context(*args, **kwargs):
+                    if add_script_run_ctx and ctx:
+                        add_script_run_ctx(threading.current_thread(), ctx)
+                    return agent.run(*args, **kwargs)
+
                 st.session_state.agent_future = st.session_state.executor.submit(
-                    agent.run,
+                    run_agent_with_context,
                     hz_name=selected_hz_name, 
                     assignment_paths=selected_ass_paths, 
                     input_texts=input_texts,
