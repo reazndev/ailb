@@ -39,15 +39,61 @@ def page_dashboard():
     st.title("🚀 Dashboard")
     
     # Provider Selection
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-...
+        provider_key_map = {
+            "OpenAI": "openai",
+            "Anthropic (Claude)": "anthropic_claude",
+            "Google (Gemini)": "google_gemini",
+            "DeepSeek": "deepseek",
+            "OpenRouter": "openrouter"
+        }
+        # Invert map for display
+        display_providers = list(provider_key_map.keys())
+        selected_display_provider = st.selectbox("Provider", display_providers)
+        provider_key = provider_key_map[selected_display_provider]
+        
+        # Determine actual provider string for Agent class (needs normalization)
+        agent_provider_arg = "openai"
+        if provider_key == "anthropic_claude": agent_provider_arg = "anthropic"
+        elif provider_key == "google_gemini": agent_provider_arg = "gemini"
+        elif provider_key == "deepseek": agent_provider_arg = "deepseek"
+        elif provider_key == "openrouter": agent_provider_arg = "openrouter"
+
+    with c2:
+        # Get models from our static detailed data first
+        static_models = MODEL_DATA.get(provider_key, {})
+        model_options = list(static_models.keys())
+        model_options.append("Manual Entry...")
+        
+        def format_func(option):
+            if option == "Manual Entry...": return option
+            m = static_models[option]
+            return f"{m['name']} ({m['context']}) - ${m['input_price']}/1M in"
+            
+        selected_option = st.selectbox("Model", model_options, format_func=format_func)
+        
+        if selected_option == "Manual Entry...":
+            model = st.text_input("Enter Model ID", value="gpt-4o")
+        else:
+            model = selected_option
+            m_data = static_models[selected_option]
+            st.caption(f"📝 {m_data.get('notes', '')}")
+            st.caption(f"💰 In: ${m_data['input_price']} | Out: ${m_data['output_price']} (per 1M)")
+
     with c3:
         cost_limit = st.number_input("Cost Limit ($)", value=1.0, step=0.1)
         st.session_state['cost_limit'] = cost_limit
         
     with c4:
         max_parallel = st.slider("Parallel Agents", min_value=1, max_value=10, value=5)
+        
+    with c5:
+        skip_qa = st.checkbox("Skip QA")
+        if not skip_qa:
+            max_qa_retries = st.number_input("Max QA Retries", min_value=1, max_value=10, value=1)
+        else:
+            max_qa_retries = 0
 
     # Project Selection
     hz_list = scan_directory("data")
@@ -123,7 +169,7 @@ def page_dashboard():
             st.markdown("---")
             st.markdown("### 👁️ Live Preview")
             p1, p2, p3 = st.columns(3)
-            with p1: 
+            with p1:
                 st.subheader("Current Task (QA Criteria)")
                 req_ph = st.empty()
                 req_ph.info("Waiting for agent to start task...")
@@ -140,7 +186,7 @@ def page_dashboard():
                 st.session_state.logs.append(msg)
                 status_text.text(f"Last Log: {msg}")
                 
-            def update_callback(data):
+def update_callback(data):
                 st.session_state.cost = data["total_cost"]
                 st.session_state.tokens = data["tokens"]
                 
@@ -156,15 +202,10 @@ def page_dashboard():
 
             def section_callback(task, reqs, i, total):
                 # Update Progress Bar
-                # i is 0-indexed, so 0/total is start. (i+1)/total is end of task? 
-                # Let's say we are working on task i.
                 p = float(i) / float(total)
                 progress_bar.progress(p)
                 
                 # Update Task List
-                # Mark 0 to i-1 as [x], i as [x] (in progress), others [ ]
-                # Or maybe style current differently? Markdown doesn't support bolding checkbox line easily.
-                # We'll mark current as [x] assuming "working on it".
                 tasks = current_tasks_ref["tasks"]
                 md_lines = []
                 for idx, t in enumerate(tasks):
@@ -178,17 +219,24 @@ def page_dashboard():
 
                 req_ph.markdown(f"#### Task: {task}\n\n**Assignment / QA Criteria:**\n\n> {reqs[:800]}...")
                 
-            def draft_callback(text):
+def draft_callback(text):
                 draft_ph.markdown(f"```markdown\n{text[:1500]}...\n```\n*(Draft truncated for preview)*")
                 
-            def qa_callback(text):
+def qa_callback(text):
                 if "PASS" in text:
                     qa_ph.success("✅ QA Passed!")
                 else:
                     qa_ph.warning(f"**Professor's Feedback:**\n\n{text}")
 
             try:
-                agent = Agent(provider=agent_provider_arg, model=model, cost_limit=cost_limit, max_parallel=max_parallel)
+                agent = Agent(
+                    provider=agent_provider_arg, 
+                    model=model, 
+                    cost_limit=cost_limit, 
+                    max_parallel=max_parallel,
+                    skip_qa=skip_qa,
+                    max_qa_retries=max_qa_retries
+                )
                 agent.on_log = log_callback
                 agent.on_update = update_callback
                 agent.on_section_start = section_callback
