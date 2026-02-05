@@ -1,0 +1,13 @@
+python-docx
+pypdf
+python-pptx
+openai
+anthropic
+google-generativeai
+pydantic
+python-dotenv
+typer
+rich
+streamlit
+tiktoken
+watchdog
