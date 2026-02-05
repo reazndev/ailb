@@ -1,7 +1,8 @@
 import os
 import openai
 import anthropic
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -20,8 +21,7 @@ class LLMClient:
             self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
             
         elif self.provider == "gemini":
-            genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-            self.client = genai.GenerativeModel(model)
+            self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
             
         elif self.provider == "deepseek":
              # DeepSeek is compatible with OpenAI SDK
@@ -68,13 +68,11 @@ class LLMClient:
                 return response.content[0].text
 
             elif self.provider == "gemini":
-                # Gemini doesn't use "system" role in the same way in the basic generate_content, 
-                # but we can prepend it or use system_instruction if supported by the specific model version.
-                # For simplicity here, we prepend.
-                full_prompt = f"System Instruction:\n{system_prompt}\n\nUser Request:\n{user_prompt}"
-                response = self.client.generate_content(
-                    full_prompt,
-                    generation_config=genai.types.GenerationConfig(
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
                         temperature=temperature
                     )
                 )

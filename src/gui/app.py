@@ -92,8 +92,10 @@ def page_dashboard():
         skip_qa = st.checkbox("Skip QA")
         if not skip_qa:
             max_qa_retries = st.number_input("Max QA Retries", min_value=1, max_value=10, value=1)
+            min_qa_score = st.number_input("Min Passing Score", min_value=1.0, max_value=10.0, value=9.0, step=0.5)
         else:
             max_qa_retries = 0
+            min_qa_score = 9.0
 
     # Project Selection
     hz_list = scan_directory("data")
@@ -144,6 +146,38 @@ def page_dashboard():
     with ac2:
         custom_prompt = st.text_area("Custom Instructions (Optional)", placeholder="e.g., Focus heavily on Python list comprehensions...", height=100)
 
+from concurrent.futures import ThreadPoolExecutor
+
+# ... Imports ...
+
+# --- STATE MANAGEMENT ---
+if "logs" not in st.session_state:
+    st.session_state.logs = []
+if "cost" not in st.session_state:
+    st.session_state.cost = 0.0
+if "tokens" not in st.session_state:
+    st.session_state.tokens = {"input": 0, "output": 0}
+if "is_running" not in st.session_state:
+    st.session_state.is_running = False
+if "agent_future" not in st.session_state:
+    st.session_state.agent_future = None
+if "executor" not in st.session_state:
+    st.session_state.executor = ThreadPoolExecutor(max_workers=1)
+if "current_tasks" not in st.session_state:
+    st.session_state.current_tasks = []
+if "current_task_index" not in st.session_state:
+    st.session_state.current_task_index = 0
+if "current_draft" not in st.session_state:
+    st.session_state.current_draft = ""
+if "current_reqs" not in st.session_state:
+    st.session_state.current_reqs = ""
+if "qa_feedback" not in st.session_state:
+    st.session_state.qa_feedback = ""
+if "agent_result" not in st.session_state:
+    st.session_state.agent_result = ""
+
+# ... (Sidebar and Layout code remains) ...
+
     # Main Action
     if st.button("Start Agent", disabled=st.session_state.is_running):
         if not selected_ass_paths:
@@ -153,80 +187,32 @@ def page_dashboard():
             st.session_state.logs = []
             st.session_state.cost = 0.0
             st.session_state.tokens = {"input": 0, "output": 0}
+            st.session_state.current_tasks = []
+            st.session_state.current_draft = ""
+            st.session_state.current_reqs = ""
+            st.session_state.qa_feedback = ""
+            st.session_state.agent_result = ""
             
-            # UI Placeholders
-            log_container = st.container()
-            status_text = st.empty()
-            
-            # Progress Area
-            st.markdown("### 📊 Progress")
-            progress_bar = st.progress(0)
-            with st.expander("📝 Task List", expanded=True):
-                task_list_ph = st.empty()
-                task_list_ph.info("Waiting for plan...")
-
-            # Preview Area
-            st.markdown("---")
-            st.markdown("### 👁️ Live Preview")
-            p1, p2, p3 = st.columns(3)
-            with p1:
-                st.subheader("Current Task (QA Criteria)")
-                req_ph = st.empty()
-                req_ph.info("Waiting for agent to start task...")
-            with p2:
-                st.subheader("Generated Draft")
-                draft_ph = st.empty()
-                draft_ph.info("Waiting for draft...")
-            with p3:
-                st.subheader("QA Feedback")
-                qa_ph = st.empty()
-                qa_ph.info("Waiting for QA review...")
-            
+            # Callbacks that only update session state
             def log_callback(msg):
                 st.session_state.logs.append(msg)
-                status_text.text(f"Last Log: {msg}")
                 
             def update_callback(data):
                 st.session_state.cost = data["total_cost"]
                 st.session_state.tokens = data["tokens"]
-                
-            # State to hold current tasks for this assignment
-            current_tasks_ref = {"tasks": []}
 
             def plan_callback(tasks):
-                current_tasks_ref["tasks"] = tasks
-                # Render initial list
-                md_list = "\n".join([f"- [ ] {t}" for t in tasks])
-                task_list_ph.markdown(md_list)
-                progress_bar.progress(0)
-
-            def section_callback(task, reqs, i, total):
-                # Update Progress Bar
-                p = float(i) / float(total)
-                progress_bar.progress(p)
+                st.session_state.current_tasks = tasks
                 
-                # Update Task List
-                tasks = current_tasks_ref["tasks"]
-                md_lines = []
-                for idx, t in enumerate(tasks):
-                    if idx < i:
-                        md_lines.append(f"- [x] ~{t}~") # Strike through done
-                    elif idx == i:
-                        md_lines.append(f"- [ ] **{t}** (Current)")
-                    else:
-                        md_lines.append(f"- [ ] {t}")
-                task_list_ph.markdown("\n".join(md_lines))
-
-                req_ph.markdown(f"#### Task: {task}\n\n**Assignment / QA Criteria:**\n\n> {reqs[:800]}...")
+            def section_callback(task, reqs, i, total):
+                st.session_state.current_task_index = i
+                st.session_state.current_reqs = reqs
                 
             def draft_callback(text):
-                draft_ph.markdown(f"```markdown\n{text[:1500]}...\n```\n*(Draft truncated for preview)*")
+                st.session_state.current_draft = text
                 
             def qa_callback(text):
-                if "PASS" in text:
-                    qa_ph.success("✅ QA Passed!")
-                else:
-                    qa_ph.warning(f"**Professor's Feedback:**\n\n{text}")
+                st.session_state.qa_feedback = text
 
             try:
                 agent = Agent(
@@ -235,7 +221,8 @@ def page_dashboard():
                     cost_limit=cost_limit, 
                     max_parallel=max_parallel,
                     skip_qa=skip_qa,
-                    max_qa_retries=max_qa_retries
+                    max_qa_retries=max_qa_retries,
+                    min_qa_score=min_qa_score
                 )
                 agent.on_log = log_callback
                 agent.on_update = update_callback
@@ -257,30 +244,102 @@ def page_dashboard():
                          c = load_file_content(f)
                          if c: input_texts[f"SOLUTION_REF_{os.path.basename(f)}"] = c
                 
-                # Run Agent
-                with st.spinner("Agent is working..."):
-                    # We now pass the list of assignment paths and the custom prompt
-                    result = agent.run(
-                        hz_name=selected_hz_name, 
-                        assignment_paths=selected_ass_paths, 
-                        input_texts=input_texts,
-                        custom_prompt=custom_prompt
-                    )
-                
-                st.success(f"Finished! Processed {len(selected_ass_paths)} assignments.")
-                st.markdown("### Agent Report")
-                st.markdown(result)
+                # Submit to background thread
+                st.session_state.agent_future = st.session_state.executor.submit(
+                    agent.run,
+                    hz_name=selected_hz_name, 
+                    assignment_paths=selected_ass_paths, 
+                    input_texts=input_texts,
+                    custom_prompt=custom_prompt
+                )
+                st.rerun()
                 
             except Exception as e:
                 st.error(f"An error occurred: {e}")
-                
-            finally:
                 st.session_state.is_running = False
+
+    # --- RUNNING STATE MONITORING ---
+    if st.session_state.is_running:
+        
+        # Check if future is done
+        if st.session_state.agent_future.done():
+            st.session_state.is_running = False
+            try:
+                result = st.session_state.agent_future.result()
+                st.session_state.agent_result = result
+            except Exception as e:
+                st.error(f"Agent failed: {e}")
+            st.rerun()
+        else:
+            # Still running - Render UI
+            st.info("Agent is running...")
+            
+            if st.button("Force Continue / Skip Step"):
+                with open(".skip_signal", "w") as f:
+                    f.write("skip")
+                st.warning("Signal sent to agent. Waiting for it to acknowledge...")
+
+            # Render Progress
+            st.markdown("### 📊 Progress")
+            total = len(st.session_state.current_tasks) if st.session_state.current_tasks else 1
+            progress_bar = st.progress(st.session_state.current_task_index / total)
+            
+            with st.expander("📝 Task List", expanded=True):
+                if not st.session_state.current_tasks:
+                    st.info("Waiting for plan...")
+                else:
+                    md_lines = []
+                    for idx, t in enumerate(st.session_state.current_tasks):
+                        if idx < st.session_state.current_task_index:
+                            md_lines.append(f"- [x] ~{t}~")
+                        elif idx == st.session_state.current_task_index:
+                            md_lines.append(f"- [ ] **{t}** (Current)")
+                        else:
+                            md_lines.append(f"- [ ] {t}")
+                    st.markdown("\n".join(md_lines))
+
+            # Preview Area
+            st.markdown("---")
+            st.markdown("### 👁️ Live Preview")
+            p1, p2, p3 = st.columns(3)
+            with p1:
+                st.subheader("Current Task")
+                if st.session_state.current_reqs:
+                    st.markdown(f"**Assignment / QA Criteria:**\n\n> {st.session_state.current_reqs[:2000]}...")
+                else:
+                    st.info("Waiting...")
+            with p2:
+                st.subheader("Generated Draft")
+                if st.session_state.current_draft:
+                    st.markdown(f"```markdown\n{st.session_state.current_draft[:5000]}...\n```")
+                else:
+                    st.info("Waiting...")
+            with p3:
+                st.subheader("QA Feedback")
+                if st.session_state.qa_feedback:
+                    if "PASS" in st.session_state.qa_feedback:
+                        st.success("✅ QA Passed!")
+                    else:
+                        st.warning(f"**Feedback:**\n\n{st.session_state.qa_feedback}")
+                else:
+                    st.info("Waiting...")
+
+            # Auto-refresh
+            time.sleep(1)
+            st.rerun()
+
+    # --- RESULT DISPLAY ---
+    if st.session_state.agent_result:
+        st.success("Finished!")
+        st.markdown("### Agent Report")
+        st.markdown(st.session_state.agent_result)
 
     # Log Viewer
     with st.expander("Execution Logs", expanded=True):
         for log in st.session_state.logs:
             st.text(log)
+
+
 
 def page_project_manager():
     st.title("📂 Project Manager")

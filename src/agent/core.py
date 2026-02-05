@@ -10,13 +10,21 @@ from src.utils.docx_editor import append_solution_to_docx
 from src.ingestion.loader import load_file_content
 from src.utils.text_cleaner import replace_sz, clean_ai_artifacts
 
+# Try to import Streamlit context helpers for thread safety
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:
+    add_script_run_ctx = None
+    get_script_run_ctx = None
+
 class Agent:
-    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, skip_qa: bool = False, max_qa_retries: int = 1):
+    def __init__(self, provider="openai", model="gpt-4o", cost_limit: float = 0.0, max_parallel: int = 5, skip_qa: bool = False, max_qa_retries: int = 1, min_qa_score: float = 9.0):
         self.llm = LLMClient(provider=provider, model=model)
         self.model = model
         self.max_parallel = max_parallel
         self.skip_qa = skip_qa
         self.max_qa_retries = max_qa_retries
+        self.min_qa_score = min_qa_score
         self.console = None  # Legacy CLI support
         self.lock = threading.Lock() # For thread-safe stats updates
         
@@ -65,6 +73,16 @@ class Agent:
         with self.lock:
             if self.cost_limit > 0 and self.total_cost >= self.cost_limit:
                 raise Exception(f"Cost limit reached! (${self.total_cost:.4f} >= ${self.cost_limit:.4f})")
+
+    def _check_signal(self):
+        if os.path.exists(".skip_signal"):
+            self.log("User requested skip. Breaking current loop.")
+            try:
+                os.remove(".skip_signal")
+            except:
+                pass
+            return True
+        return False
 
     def process_assignment(self, ass_path: str, output_dir: str, full_context: str, input_overview: str, custom_prompt: str) -> str:
         ass_filename = os.path.basename(ass_path)
@@ -142,9 +160,13 @@ class Agent:
                 
                 qa_attempts = 0
                 while qa_attempts <= self.max_qa_retries:
+                    if self._check_signal():
+                        break
+
                     qa_input = QA_PROMPT.format(
                         assignment_text=assignment_text,
-                        generated_content=draft
+                        generated_content=draft,
+                        min_score=self.min_qa_score
                     )
                     
                     review = self.llm.generate_text(
@@ -223,12 +245,21 @@ class Agent:
         
         final_reports = []
         
+        # Capture context if running in Streamlit
+        ctx = get_script_run_ctx() if get_script_run_ctx else None
+
+        def task_wrapper(*args, **kwargs):
+            # Apply context to the worker thread
+            if add_script_run_ctx and ctx:
+                add_script_run_ctx(threading.current_thread(), ctx)
+            return self.process_assignment(*args, **kwargs)
+        
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
             futures = []
             for ass_path in assignment_paths:
                 futures.append(
                     executor.submit(
-                        self.process_assignment, 
+                        task_wrapper, 
                         ass_path, 
                         output_dir, 
                         full_context, 

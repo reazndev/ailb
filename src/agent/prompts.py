@@ -25,6 +25,10 @@ Das Format soll eine einfache Liste sein, z.B.:
 1. Aufgabe Teil 1 bearbeiten...
 2. Datenbank-Schema erstellen...
 3. Fazit schreiben...
+
+WICHTIG:
+- Ignoriere Aufgaben, die externe Interaktionen erfordern (z.B. "Moodle Quiz bearbeiten", "Online-Test machen", "Im Forum posten"). Diese können von einer KI nicht erledigt werden.
+- Konzentriere dich rein auf die textuelle/inhaltliche Ausarbeitung der Aufgabenstellung basierend auf den Input-Dateien.
 """
 
 WORKER_PROMPT = """
@@ -54,6 +58,6 @@ Lösung des Studenten:
 
 Bewerte die Lösung auf einer Skala von 1 bis 10.
 Gib Feedback: Was fehlt? Was ist falsch? Was ist gut?
-Wenn die Note >= 9 ist, antworte nur mit "PASS".
+Wenn die Note >= {min_score} ist, antworte nur mit "PASS".
 Andernfalls gib eine Liste von konkreten Verbesserungsanforderungen zurück.
 """

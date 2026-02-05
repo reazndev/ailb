@@ -3,7 +3,7 @@ pypdf
 python-pptx
 openai
 anthropic
-google-generativeai
+google-genai
 pydantic
 python-dotenv
 typer

@@ -1,6 +1,6 @@
 import os
 import openai
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,11 +34,10 @@ def get_available_models(provider: str) -> list[str]:
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key: return ["gemini-1.5-pro", "gemini-1.5-flash"]
-            genai.configure(api_key=api_key)
-            # list_models returns an iterator
-            models = genai.list_models()
+            client = genai.Client(api_key=api_key)
+            models = client.models.list()
             # Filter for generateContent support
-            return sorted([m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods])
+            return sorted([m.name.replace("models/", "") for m in models if m.supported_actions and "generateContent" in m.supported_actions])
 
         elif provider == "deepseek":
             api_key = os.getenv("DEEPSEEK_API_KEY")
