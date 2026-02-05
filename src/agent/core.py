@@ -84,6 +84,90 @@ class Agent:
             return True
         return False
 
+    def _process_task(self, ass_filename: str, task: str, i: int, total_tasks: int, full_context: str, assignment_text: str, user_instructions: str) -> str:
+        self._check_budget()
+        self.log(f"[{ass_filename}] Starting Task {i+1}/{total_tasks}: {task}")
+        
+        if self.on_section_start:
+            self.on_section_start(task, assignment_text, i, total_tasks)
+
+        worker_input = WORKER_PROMPT.format(
+            current_task=task,
+            context_text=full_context,
+            assignment_text=assignment_text
+        ) + user_instructions
+        
+        draft = self.llm.generate_text(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=worker_input
+        )
+        self._track_usage(SYSTEM_PROMPT + worker_input, draft)
+        
+        if self.on_draft:
+            self.on_draft(draft)
+        
+        # QA Loop
+        self._check_budget()
+        
+        if self.skip_qa:
+            self.log(f"[{ass_filename}] Skipping QA Review for Task {i+1}.")
+        else:
+            self.log(f"[{ass_filename}] QA Review for Task {i+1}...")
+            
+            qa_attempts = 0
+            while qa_attempts <= self.max_qa_retries:
+                if self._check_signal():
+                    break
+
+                qa_input = QA_PROMPT.format(
+                    assignment_text=assignment_text,
+                    generated_content=draft,
+                    min_score=self.min_qa_score
+                )
+                
+                review = self.llm.generate_text(
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=qa_input
+                )
+                self._track_usage(SYSTEM_PROMPT + qa_input, review)
+                
+                if self.on_qa_feedback:
+                    self.on_qa_feedback(review)
+
+                if "PASS" in review:
+                    self.log(f"[{ass_filename}] QA Passed for Task {i+1}.")
+                    break
+                
+                qa_attempts += 1
+                if qa_attempts > self.max_qa_retries:
+                    self.log(f"[{ass_filename}] QA failed max retries for Task {i+1}.")
+                    break
+                    
+                self.log(f"[{ass_filename}] QA failed (Attempt {qa_attempts}/{self.max_qa_retries}). Improving Task {i+1}...")
+                self._check_budget()
+                
+                refinement_input = f"""
+                Der Professor hat folgendes Feedback gegeben:
+                {review}
+                
+                Bitte überarbeite den vorherigen Entwurf basierend auf diesem Feedback.
+                
+                Alter Entwurf:
+                {draft}
+                """
+                refined_draft = self.llm.generate_text(
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=refinement_input
+                )
+                self._track_usage(SYSTEM_PROMPT + refinement_input, refined_draft)
+                draft = refined_draft
+                
+                if self.on_draft:
+                        self.on_draft(draft)
+        
+        cleaned_text = replace_sz(clean_ai_artifacts(draft))
+        return f"## {task}\n\n{cleaned_text}"
+
     def process_assignment(self, ass_path: str, output_dir: str, full_context: str, input_overview: str, custom_prompt: str) -> str:
         ass_filename = os.path.basename(ass_path)
         self.log(f"Processing Assignment: {ass_filename}")
@@ -125,92 +209,37 @@ class Agent:
 
         self.log(f"[{ass_filename}] Parsed {len(tasks)} tasks.")
         
-        assignment_solution_parts = []
+        # 3. Execute Tasks (Parallelized)
+        assignment_solution_parts = [None] * len(tasks)
+        
+        # Capture context for thread safety
+        ctx = get_script_run_ctx() if get_script_run_ctx else None
+        
+        def subtask_wrapper(index, task_str):
+             if add_script_run_ctx and ctx:
+                add_script_run_ctx(threading.current_thread(), ctx)
+             return self._process_task(
+                 ass_filename, task_str, index, len(tasks), full_context, assignment_text, user_instructions
+             )
 
-        # 3. Execute Tasks
-        for i, task in enumerate(tasks):
-            self._check_budget()
-            self.log(f"[{ass_filename}] Task {i+1}/{len(tasks)}: {task}")
+        # Use same max_parallel for task concurrency
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
+            future_to_index = {
+                executor.submit(subtask_wrapper, i, task): i 
+                for i, task in enumerate(tasks)
+            }
             
-            if self.on_section_start:
-                self.on_section_start(task, assignment_text, i, len(tasks))
+            for future in concurrent.futures.as_completed(future_to_index):
+                idx = future_to_index[future]
+                try:
+                    part_result = future.result()
+                    assignment_solution_parts[idx] = part_result
+                except Exception as e:
+                    self.log(f"Error in task {idx}: {e}")
+                    assignment_solution_parts[idx] = f"## Task {idx} Failed\n\nError: {e}"
 
-            worker_input = WORKER_PROMPT.format(
-                current_task=task,
-                context_text=full_context,
-                assignment_text=assignment_text
-            ) + user_instructions
-            
-            draft = self.llm.generate_text(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=worker_input
-            )
-            self._track_usage(SYSTEM_PROMPT + worker_input, draft)
-            
-            if self.on_draft:
-                self.on_draft(draft)
-            
-            # 4. QA Loop
-            self._check_budget()
-            
-            if self.skip_qa:
-                self.log(f"[{ass_filename}] Skipping QA Review.")
-            else:
-                self.log(f"[{ass_filename}] QA Review...")
-                
-                qa_attempts = 0
-                while qa_attempts <= self.max_qa_retries:
-                    if self._check_signal():
-                        break
-
-                    qa_input = QA_PROMPT.format(
-                        assignment_text=assignment_text,
-                        generated_content=draft,
-                        min_score=self.min_qa_score
-                    )
-                    
-                    review = self.llm.generate_text(
-                        system_prompt=SYSTEM_PROMPT,
-                        user_prompt=qa_input
-                    )
-                    self._track_usage(SYSTEM_PROMPT + qa_input, review)
-                    
-                    if self.on_qa_feedback:
-                        self.on_qa_feedback(review)
-
-                    if "PASS" in review:
-                        self.log(f"[{ass_filename}] QA Passed.")
-                        break
-                    
-                    qa_attempts += 1
-                    if qa_attempts > self.max_qa_retries:
-                        self.log(f"[{ass_filename}] QA failed max retries ({self.max_qa_retries}).")
-                        break
-                        
-                    self.log(f"[{ass_filename}] QA failed (Attempt {qa_attempts}/{self.max_qa_retries}). Improving...")
-                    self._check_budget()
-                    
-                    refinement_input = f"""
-                    Der Professor hat folgendes Feedback gegeben:
-                    {review}
-                    
-                    Bitte überarbeite den vorherigen Entwurf basierend auf diesem Feedback.
-                    
-                    Alter Entwurf:
-                    {draft}
-                    """
-                    refined_draft = self.llm.generate_text(
-                        system_prompt=SYSTEM_PROMPT,
-                        user_prompt=refinement_input
-                    )
-                    self._track_usage(SYSTEM_PROMPT + refinement_input, refined_draft)
-                    draft = refined_draft
-                    
-                    if self.on_draft:
-                         self.on_draft(draft)
-            
-            cleaned_text = replace_sz(clean_ai_artifacts(draft))
-            assignment_solution_parts.append(f"## {task}\n\n{cleaned_text}")
+        # Filter out Nones in case of catastrophic failure
+        assignment_solution_parts = [p for p in assignment_solution_parts if p is not None]
         
         full_solution_text = "\n\n".join(assignment_solution_parts)
         report_part = f"# Solution for {ass_filename}\n\n{full_solution_text}"
@@ -248,7 +277,7 @@ class Agent:
         # Capture context if running in Streamlit
         ctx = get_script_run_ctx() if get_script_run_ctx else None
 
-        def task_wrapper(*args, **kwargs):
+        def assignment_wrapper(*args, **kwargs):
             # Apply context to the worker thread
             if add_script_run_ctx and ctx:
                 add_script_run_ctx(threading.current_thread(), ctx)
@@ -259,7 +288,7 @@ class Agent:
             for ass_path in assignment_paths:
                 futures.append(
                     executor.submit(
-                        task_wrapper, 
+                        assignment_wrapper, 
                         ass_path, 
                         output_dir, 
                         full_context, 

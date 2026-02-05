@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from src.ingestion.scanner import scan_directory
 from src.ingestion.loader import load_file_content
 from src.agent.core import Agent
@@ -19,6 +20,22 @@ if "tokens" not in st.session_state:
     st.session_state.tokens = {"input": 0, "output": 0}
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
+if "agent_future" not in st.session_state:
+    st.session_state.agent_future = None
+if "executor" not in st.session_state:
+    st.session_state.executor = ThreadPoolExecutor(max_workers=1)
+if "current_tasks" not in st.session_state:
+    st.session_state.current_tasks = []
+if "current_task_index" not in st.session_state:
+    st.session_state.current_task_index = 0
+if "current_draft" not in st.session_state:
+    st.session_state.current_draft = ""
+if "current_reqs" not in st.session_state:
+    st.session_state.current_reqs = ""
+if "qa_feedback" not in st.session_state:
+    st.session_state.qa_feedback = ""
+if "agent_result" not in st.session_state:
+    st.session_state.agent_result = ""
 
 # --- SIDEBAR ---
 st.sidebar.title("🎓 AI Student")
@@ -32,6 +49,27 @@ cost_col2.metric("Limit", f"${st.session_state.get('cost_limit', 1.0):.2f}")
 
 st.sidebar.text(f"In Tokens: {st.session_state.tokens['input']}")
 st.sidebar.text(f"Out Tokens: {st.session_state.tokens['output']}")
+
+# --- CALLBACKS ---
+def log_callback(msg):
+    st.session_state.logs.append(msg)
+    
+def update_callback(data):
+    st.session_state.cost = data["total_cost"]
+    st.session_state.tokens = data["tokens"]
+
+def plan_callback(tasks):
+    st.session_state.current_tasks = tasks
+    
+def section_callback(task, reqs, i, total):
+    st.session_state.current_task_index = i
+    st.session_state.current_reqs = reqs
+    
+def draft_callback(text):
+    st.session_state.current_draft = text
+    
+def qa_callback(text):
+    st.session_state.qa_feedback = text
 
 # --- PAGES ---
 
@@ -48,12 +86,10 @@ def page_dashboard():
             "DeepSeek": "deepseek",
             "OpenRouter": "openrouter"
         }
-        # Invert map for display
         display_providers = list(provider_key_map.keys())
         selected_display_provider = st.selectbox("Provider", display_providers)
         provider_key = provider_key_map[selected_display_provider]
         
-        # Determine actual provider string for Agent class (needs normalization)
         agent_provider_arg = "openai"
         if provider_key == "anthropic_claude": agent_provider_arg = "anthropic"
         elif provider_key == "google_gemini": agent_provider_arg = "gemini"
@@ -61,7 +97,6 @@ def page_dashboard():
         elif provider_key == "openrouter": agent_provider_arg = "openrouter"
 
     with c2:
-        # Get models from our static detailed data first
         static_models = MODEL_DATA.get(provider_key, {})
         model_options = list(static_models.keys())
         model_options.append("Manual Entry...")
@@ -112,151 +147,32 @@ def page_dashboard():
     ac1, ac2 = st.columns(2)
     
     with ac1:
-        # Get basenames for display
         ass_map = {os.path.basename(f): f for f in current_hz.assignment_files}
         all_ass_names = list(ass_map.keys())
         
-        # Initialize state for multiselect if not present or if project changed
-        # We use a composite key to reset selection when project changes
         ms_key = f"ms_{selected_hz_name}"
         if ms_key not in st.session_state:
              st.session_state[ms_key] = all_ass_names
              
-        # Select All / Deselect All Handlers
         def select_all():
             st.session_state[ms_key] = all_ass_names
         
         def deselect_all():
             st.session_state[ms_key] = []
             
-        # Buttons
         b1, b2 = st.columns([0.3, 0.7])
         b1.button("Select All", on_click=select_all, key=f"btn_all_{selected_hz_name}")
         b2.button("Deselect All", on_click=deselect_all, key=f"btn_none_{selected_hz_name}")
 
-        # Multiselect
         selected_ass_names = st.multiselect(
             "Select Assignments to Solve", 
             options=all_ass_names,
             key=ms_key
         )
-        
         selected_ass_paths = [ass_map[name] for name in selected_ass_names]
 
     with ac2:
         custom_prompt = st.text_area("Custom Instructions (Optional)", placeholder="e.g., Focus heavily on Python list comprehensions...", height=100)
-
-from concurrent.futures import ThreadPoolExecutor
-
-# ... Imports ...
-
-# --- STATE MANAGEMENT ---
-if "logs" not in st.session_state:
-    st.session_state.logs = []
-if "cost" not in st.session_state:
-    st.session_state.cost = 0.0
-if "tokens" not in st.session_state:
-    st.session_state.tokens = {"input": 0, "output": 0}
-if "is_running" not in st.session_state:
-    st.session_state.is_running = False
-if "agent_future" not in st.session_state:
-    st.session_state.agent_future = None
-if "executor" not in st.session_state:
-    st.session_state.executor = ThreadPoolExecutor(max_workers=1)
-if "current_tasks" not in st.session_state:
-    st.session_state.current_tasks = []
-if "current_task_index" not in st.session_state:
-    st.session_state.current_task_index = 0
-if "current_draft" not in st.session_state:
-    st.session_state.current_draft = ""
-if "current_reqs" not in st.session_state:
-    st.session_state.current_reqs = ""
-if "qa_feedback" not in st.session_state:
-    st.session_state.qa_feedback = ""
-if "agent_result" not in st.session_state:
-    st.session_state.agent_result = ""
-
-# ... (Sidebar and Layout code remains) ...
-
-    # Main Action
-    if st.button("Start Agent", disabled=st.session_state.is_running):
-        if not selected_ass_paths:
-            st.error("Please select at least one assignment.")
-        else:
-            st.session_state.is_running = True
-            st.session_state.logs = []
-            st.session_state.cost = 0.0
-            st.session_state.tokens = {"input": 0, "output": 0}
-            st.session_state.current_tasks = []
-            st.session_state.current_draft = ""
-            st.session_state.current_reqs = ""
-            st.session_state.qa_feedback = ""
-            st.session_state.agent_result = ""
-            
-            # Callbacks that only update session state
-            def log_callback(msg):
-                st.session_state.logs.append(msg)
-                
-            def update_callback(data):
-                st.session_state.cost = data["total_cost"]
-                st.session_state.tokens = data["tokens"]
-
-            def plan_callback(tasks):
-                st.session_state.current_tasks = tasks
-                
-            def section_callback(task, reqs, i, total):
-                st.session_state.current_task_index = i
-                st.session_state.current_reqs = reqs
-                
-            def draft_callback(text):
-                st.session_state.current_draft = text
-                
-            def qa_callback(text):
-                st.session_state.qa_feedback = text
-
-            try:
-                agent = Agent(
-                    provider=agent_provider_arg, 
-                    model=model, 
-                    cost_limit=cost_limit, 
-                    max_parallel=max_parallel,
-                    skip_qa=skip_qa,
-                    max_qa_retries=max_qa_retries,
-                    min_qa_score=min_qa_score
-                )
-                agent.on_log = log_callback
-                agent.on_update = update_callback
-                agent.on_section_start = section_callback
-                agent.on_draft = draft_callback
-                agent.on_qa_feedback = qa_callback
-                agent.on_plan_generated = plan_callback
-                
-                # Load Inputs + Solutions as Context
-                with st.spinner("Loading context files..."):
-                    input_texts = {}
-                    # Load Inputs
-                    for f in current_hz.input_files:
-                        c = load_file_content(f)
-                        if c: input_texts[f] = c
-                    
-                    # Load Solutions (as reference material)
-                    for f in current_hz.solutions_files:
-                         c = load_file_content(f)
-                         if c: input_texts[f"SOLUTION_REF_{os.path.basename(f)}"] = c
-                
-                # Submit to background thread
-                st.session_state.agent_future = st.session_state.executor.submit(
-                    agent.run,
-                    hz_name=selected_hz_name, 
-                    assignment_paths=selected_ass_paths, 
-                    input_texts=input_texts,
-                    custom_prompt=custom_prompt
-                )
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
-                st.session_state.is_running = False
 
     # --- RUNNING STATE MONITORING ---
     if st.session_state.is_running:
@@ -325,7 +241,7 @@ if "agent_result" not in st.session_state:
                     st.info("Waiting...")
 
             # Auto-refresh
-            time.sleep(1)
+            time.sleep(0.5)
             st.rerun()
 
     # --- RESULT DISPLAY ---
@@ -334,11 +250,71 @@ if "agent_result" not in st.session_state:
         st.markdown("### Agent Report")
         st.markdown(st.session_state.agent_result)
 
-    # Log Viewer
-    with st.expander("Execution Logs", expanded=True):
+    st.markdown("---")
+    
+    # Main Action at the bottom
+    if st.button("Start Agent", disabled=st.session_state.is_running):
+        if not selected_ass_paths:
+            st.error("Please select at least one assignment.")
+        else:
+            st.session_state.is_running = True
+            st.session_state.logs = []
+            st.session_state.cost = 0.0
+            st.session_state.tokens = {"input": 0, "output": 0}
+            st.session_state.current_tasks = []
+            st.session_state.current_draft = ""
+            st.session_state.current_reqs = ""
+            st.session_state.qa_feedback = ""
+            st.session_state.agent_result = ""
+            
+            try:
+                agent = Agent(
+                    provider=agent_provider_arg, 
+                    model=model, 
+                    cost_limit=cost_limit, 
+                    max_parallel=max_parallel,
+                    skip_qa=skip_qa,
+                    max_qa_retries=max_qa_retries,
+                    min_qa_score=min_qa_score
+                )
+                agent.on_log = log_callback
+                agent.on_update = update_callback
+                agent.on_section_start = section_callback
+                agent.on_draft = draft_callback
+                agent.on_qa_feedback = qa_callback
+                agent.on_plan_generated = plan_callback
+                
+                # Load Inputs + Solutions as Context
+                with st.spinner("Loading context files..."):
+                    input_texts = {}
+                    # Load Inputs
+                    for f in current_hz.input_files:
+                        c = load_file_content(f)
+                        if c: input_texts[f] = c
+                    
+                    # Load Solutions (as reference material)
+                    for f in current_hz.solutions_files:
+                         c = load_file_content(f)
+                         if c: input_texts[f"SOLUTION_REF_{os.path.basename(f)}"] = c
+                
+                # Submit to background thread
+                st.session_state.agent_future = st.session_state.executor.submit(
+                    agent.run,
+                    hz_name=selected_hz_name, 
+                    assignment_paths=selected_ass_paths, 
+                    input_texts=input_texts,
+                    custom_prompt=custom_prompt
+                )
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+                st.session_state.is_running = False
+
+    # Log Viewer at the very bottom
+    with st.expander("Execution Logs", expanded=False):
         for log in st.session_state.logs:
             st.text(log)
-
 
 
 def page_project_manager():
