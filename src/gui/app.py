@@ -186,7 +186,7 @@ def page_dashboard():
                 st.session_state.logs.append(msg)
                 status_text.text(f"Last Log: {msg}")
                 
-def update_callback(data):
+            def update_callback(data):
                 st.session_state.cost = data["total_cost"]
                 st.session_state.tokens = data["tokens"]
                 
@@ -219,10 +219,10 @@ def update_callback(data):
 
                 req_ph.markdown(f"#### Task: {task}\n\n**Assignment / QA Criteria:**\n\n> {reqs[:800]}...")
                 
-def draft_callback(text):
+            def draft_callback(text):
                 draft_ph.markdown(f"```markdown\n{text[:1500]}...\n```\n*(Draft truncated for preview)*")
                 
-def qa_callback(text):
+            def qa_callback(text):
                 if "PASS" in text:
                     qa_ph.success("✅ QA Passed!")
                 else:
